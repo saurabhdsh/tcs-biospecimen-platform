@@ -270,10 +270,30 @@ ensure_postgres_binaries() {
   ok "User-local PostgreSQL ready: $PG_BIN"
 }
 
+pg_listening() {
+  if [[ -x "$PG_BIN/pg_isready" ]]; then
+    "$PG_BIN/pg_isready" -h 127.0.0.1 -p "$PGPORT" -q
+    return $?
+  fi
+  if [[ -x "$PG_BIN/psql" ]]; then
+    "$PG_BIN/psql" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d postgres -tAc "SELECT 1" >/dev/null 2>&1
+    return $?
+  fi
+  local py="${PYTHON_BIN:-python3}"
+  "$py" -c "import socket,sys; s=socket.socket(); s.settimeout(0.3); sys.exit(0 if s.connect_ex(('127.0.0.1', int(sys.argv[1])))==0 else 1)" "$PGPORT"
+}
+
+psql_on() {
+  local db="$1"
+  shift
+  [[ -x "$PG_BIN/psql" ]] || die "This PostgreSQL package is missing psql. Install Postgres.app from https://postgresapp.com and rerun ./start-local.sh."
+  "$PG_BIN/psql" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d "$db" "$@"
+}
+
 wait_pg() {
   local i
   for i in $(seq 1 50); do
-    if "$PG_BIN/pg_isready" -h 127.0.0.1 -p "$PGPORT" -q; then
+    if pg_listening; then
       return 0
     fi
     sleep 0.3
@@ -292,7 +312,7 @@ ensure_database() {
     ok "Initialized project-local database cluster"
   fi
 
-  if ! "$PG_BIN/pg_isready" -h 127.0.0.1 -p "$PGPORT" -q; then
+  if ! pg_listening; then
     if [[ -f "$data/postmaster.pid" ]]; then
       rm -f "$data/postmaster.pid"
     fi
@@ -304,16 +324,18 @@ ensure_database() {
   fi
   wait_pg || die "Project-local PostgreSQL did not start. See $RUNTIME/postgres.log"
 
-  if ! "$PG_BIN/psql" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d postgres -tAc \
-      "SELECT 1 FROM pg_database WHERE datname='$PGDATABASE'" | grep -q 1; then
-    "$PG_BIN/createdb" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" "$PGDATABASE"
+  if ! psql_on postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$PGDATABASE'" | grep -q 1; then
+    if [[ -x "$PG_BIN/createdb" ]]; then
+      "$PG_BIN/createdb" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" "$PGDATABASE"
+    else
+      psql_on postgres -c "CREATE DATABASE $PGDATABASE"
+    fi
     ok "Created database $PGDATABASE"
   else
     ok "Database $PGDATABASE already exists"
   fi
 
-  "$PG_BIN/psql" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-    -c "GRANT ALL ON SCHEMA public TO $PGUSER;" >/dev/null
+  psql_on "$PGDATABASE" -c "GRANT ALL ON SCHEMA public TO $PGUSER;" >/dev/null
 }
 
 write_backend_env() {
