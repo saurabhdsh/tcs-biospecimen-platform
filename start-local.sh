@@ -199,16 +199,24 @@ ensure_node() {
 
 find_pg_bin_from() {
   local dir="$1"
-  if [[ -x "$dir/initdb" && -x "$dir/pg_ctl" && -x "$dir/psql" ]]; then
+  if [[ -x "$dir/initdb" && -x "$dir/pg_ctl" ]]; then
     PG_BIN="$dir"
     return 0
   fi
   return 1
 }
 
+use_pg_libs() {
+  local libdir
+  libdir="$(cd "$PG_BIN/.." && pwd)/lib"
+  if [[ -d "$libdir" ]]; then
+    export DYLD_LIBRARY_PATH="$libdir${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+  fi
+}
+
 locate_existing_postgres() {
   local dir
-  if find_pg_bin_from "$RUNTIME/postgres/bin"; then
+  if resolve_pg_bin; then
     return 0
   fi
   for dir in \
@@ -225,7 +233,7 @@ locate_existing_postgres() {
       return 0
     fi
   done
-  if command -v initdb >/dev/null 2>&1 && command -v pg_ctl >/dev/null 2>&1 && command -v psql >/dev/null 2>&1; then
+  if command -v initdb >/dev/null 2>&1 && command -v pg_ctl >/dev/null 2>&1; then
     PG_BIN="$(dirname "$(command -v pg_ctl)")"
     return 0
   fi
@@ -234,6 +242,7 @@ locate_existing_postgres() {
 
 ensure_postgres_binaries() {
   if locate_existing_postgres; then
+    use_pg_libs
     ok "Using PostgreSQL tools in $PG_BIN"
     return
   fi
@@ -267,44 +276,82 @@ ensure_postgres_binaries() {
 
   resolve_pg_bin || die "Failed to unpack user-local PostgreSQL"
   unquarantine "$RUNTIME/postgres"
+  use_pg_libs
   ok "User-local PostgreSQL ready: $PG_BIN"
 }
 
 pg_listening() {
-  if [[ -x "$PG_BIN/pg_isready" ]]; then
-    "$PG_BIN/pg_isready" -h 127.0.0.1 -p "$PGPORT" -q
-    return $?
+  if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$PGPORT" >/dev/null 2>&1; then
+    return 0
   fi
-  if [[ -x "$PG_BIN/psql" ]]; then
-    "$PG_BIN/psql" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d postgres -tAc "SELECT 1" >/dev/null 2>&1
-    return $?
-  fi
-  local py="${PYTHON_BIN:-python3}"
-  "$py" -c "import socket,sys; s=socket.socket(); s.settimeout(0.3); sys.exit(0 if s.connect_ex(('127.0.0.1', int(sys.argv[1])))==0 else 1)" "$PGPORT"
-}
-
-psql_on() {
-  local db="$1"
-  shift
-  [[ -x "$PG_BIN/psql" ]] || die "This PostgreSQL package is missing psql. Install Postgres.app from https://postgresapp.com and rerun ./start-local.sh."
-  "$PG_BIN/psql" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d "$db" "$@"
+  bash -c "echo >/dev/tcp/127.0.0.1/$PGPORT" >/dev/null 2>&1
 }
 
 wait_pg() {
   local i
-  for i in $(seq 1 50); do
+  for i in $(seq 1 80); do
     if pg_listening; then
       return 0
     fi
-    sleep 0.3
+    sleep 0.25
   done
   return 1
+}
+
+fail_pg() {
+  if [[ -f "$RUNTIME/postgres.log" ]]; then
+    printf '\n----- postgres.log (last 40 lines) -----\n' >&2
+    tail -n 40 "$RUNTIME/postgres.log" >&2 || true
+    printf '----------------------------------------\n' >&2
+  fi
+  die "Project-local PostgreSQL did not start. See $RUNTIME/postgres.log"
+}
+
+bootstrap_database() {
+  local py="$BACKEND/.venv/bin/python"
+  [[ -x "$py" ]] || die "Python venv is missing. API dependencies must be installed before the database is created."
+  PGPORT="$PGPORT" PGUSER="$PGUSER" PGPASSWORD="$PGPASSWORD" PGDATABASE="$PGDATABASE" \
+    "$py" <<'PY'
+import os
+import psycopg
+
+port = int(os.environ["PGPORT"])
+user = os.environ["PGUSER"]
+password = os.environ["PGPASSWORD"]
+name = os.environ["PGDATABASE"]
+conn = psycopg.connect(
+    host="127.0.0.1",
+    port=port,
+    user=user,
+    password=password,
+    dbname="postgres",
+    autocommit=True,
+)
+exists = conn.execute("SELECT 1 FROM pg_database WHERE datname=%s", (name,)).fetchone()
+if not exists:
+    conn.execute(f'CREATE DATABASE "{name}"')
+    print("created")
+else:
+    print("exists")
+conn.close()
+conn = psycopg.connect(
+    host="127.0.0.1",
+    port=port,
+    user=user,
+    password=password,
+    dbname=name,
+    autocommit=True,
+)
+conn.execute(f"GRANT ALL ON SCHEMA public TO {user}")
+conn.close()
+PY
 }
 
 ensure_database() {
   local data="$RUNTIME/pgdata"
   local sock="$RUNTIME/pgsocket"
   mkdir -p "$sock"
+  use_pg_libs
 
   log "Starting a project-local PostgreSQL on port $PGPORT"
   if [[ ! -f "$data/PG_VERSION" ]]; then
@@ -313,29 +360,29 @@ ensure_database() {
   fi
 
   if ! pg_listening; then
-    if [[ -f "$data/postmaster.pid" ]]; then
+    if [[ -f "$data/postmaster.pid" ]] && ! "$PG_BIN/pg_ctl" -D "$data" status >/dev/null 2>&1; then
       rm -f "$data/postmaster.pid"
     fi
-    "$PG_BIN/pg_ctl" -D "$data" -l "$RUNTIME/postgres.log" -w start \
-      -o "-p $PGPORT -k $sock --listen_addresses=127.0.0.1"
-    PG_STARTED=1
+    if "$PG_BIN/pg_ctl" -D "$data" -l "$RUNTIME/postgres.log" -w start \
+      -o "-p $PGPORT -k $sock --listen_addresses=127.0.0.1"; then
+      PG_STARTED=1
+    elif pg_listening; then
+      ok "PostgreSQL already listening on $PGPORT"
+    else
+      fail_pg
+    fi
   else
     ok "PostgreSQL already listening on $PGPORT"
   fi
-  wait_pg || die "Project-local PostgreSQL did not start. See $RUNTIME/postgres.log"
+  wait_pg || fail_pg
 
-  if ! psql_on postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$PGDATABASE'" | grep -q 1; then
-    if [[ -x "$PG_BIN/createdb" ]]; then
-      "$PG_BIN/createdb" -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" "$PGDATABASE"
-    else
-      psql_on postgres -c "CREATE DATABASE $PGDATABASE"
-    fi
+  local status
+  status="$(bootstrap_database)"
+  if [[ "$status" == *created* ]]; then
     ok "Created database $PGDATABASE"
   else
     ok "Database $PGDATABASE already exists"
   fi
-
-  psql_on "$PGDATABASE" -c "GRANT ALL ON SCHEMA public TO $PGUSER;" >/dev/null
 }
 
 write_backend_env() {
@@ -352,26 +399,28 @@ EOF
   ok "Wrote backend/.env for 127.0.0.1:${PGPORT}"
 }
 
-setup_backend() {
+setup_backend_deps() {
   log "Setting up Python API"
   mkdir -p "$BACKEND/uploads"
   if [[ ! -x "$BACKEND/.venv/bin/python" ]]; then
     "$PYTHON_BIN" -m venv "$BACKEND/.venv"
   fi
-  # shellcheck disable=SC1091
-  source "$BACKEND/.venv/bin/activate"
-  pip install --upgrade pip >/dev/null
-  pip install -r "$BACKEND/requirements.txt"
+  "$BACKEND/.venv/bin/python" -m pip install --upgrade pip >/dev/null
+  "$BACKEND/.venv/bin/python" -m pip install -r "$BACKEND/requirements.txt"
+  ok "API dependencies are ready"
+}
+
+setup_backend_migrate() {
   (
     cd "$BACKEND"
-    alembic upgrade head
+    "$BACKEND/.venv/bin/alembic" upgrade head
     if [[ "$RESEED" -eq 1 ]]; then
-      python -m app.seed --reset
+      "$BACKEND/.venv/bin/python" -m app.seed --reset
     else
-      python -m app.seed
+      "$BACKEND/.venv/bin/python" -m app.seed
     fi
   )
-  ok "API dependencies, migrations, and seed data are ready"
+  ok "Migrations and seed data are ready"
 }
 
 setup_frontend() {
@@ -452,14 +501,16 @@ EOF
 need_cmd curl
 need_cmd tar
 need_cmd lsof
+need_cmd unzip
 
 mkdir -p "$RUNTIME"
 log "Preparing a user-local environment (Homebrew is not required)"
 ensure_python
 ensure_node
 ensure_postgres_binaries
-ensure_database
 write_backend_env
-setup_backend
+setup_backend_deps
+ensure_database
+setup_backend_migrate
 setup_frontend
 start_services
