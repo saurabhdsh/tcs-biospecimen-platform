@@ -1,0 +1,6 @@
+shipment_reference,sample_external_id,external_barcode,sample_type,material_type,quantity,quantity_unit,collection_date,received_date,source_location,temperature_requirement
+SHP-INTAKE-2026-001,EXT-INTAKE-00001,GSK-INTAKE-00001,Whole Blood,Blood,10,mL,2026-08-28,2026-08-30,Bengaluru Clinical Site,-80C
+SHP-INTAKE-2026-001,EXT-INTAKE-00002,GSK-INTAKE-00002,Plasma,Plasma,5,mL,2026-08-28,2026-08-30,Bengaluru Clinical Site,-80C
+SHP-INTAKE-2026-001,EXT-INTAKE-00003,GSK-INTAKE-00003,Serum,Serum,4,mL,2026-08-28,2026-08-30,Bengaluru Clinical Site,-80C
+SHP-INTAKE-2026-001,EXT-INTAKE-00004,GSK-INTAKE-00004,PBMC,Cells,2,mL,2026-08-28,2026-08-30,Bengaluru Clinical Site,-196C
+SHP-INTAKE-2026-001,EXT-INTAKE-00005,GSK-INTAKE-00005,DNA,Nucleic Acid,50,uL,2026-08-28,2026-08-30,Bengaluru Clinical Site,-80C

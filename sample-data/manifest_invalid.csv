@@ -1,0 +1,7 @@
+shipment_reference,sample_external_id,external_barcode,sample_type,material_type,quantity,quantity_unit,collection_date,received_date,source_location,temperature_requirement
+SHP-INTAKE-2026-002,EXT-BAD-00001,GSK-BAD-00001,Whole Blood,Blood,8,mL,2026-08-28,2026-08-30,London Clinical Site,-80C
+SHP-INTAKE-2026-002,EXT-BAD-00002,GSK-BAD-00002,Plasma,Plasma,-3,mL,2026-08-28,2026-08-30,London Clinical Site,-80C
+SHP-INTAKE-2026-002,EXT-BAD-00002,GSK-BAD-00003,Serum,Serum,4,mL,2026-08-28,2026-08-30,London Clinical Site,-80C
+SHP-INTAKE-2026-002,,GSK-BAD-00004,PBMC,Cells,2,mL,2026-08-28,2026-08-30,London Clinical Site,-80C
+SHP-INTAKE-2026-002,EXT-BAD-00005,GSK-BAD-00005,DNA,Nucleic Acid,abc,uL,2026-08-28,2026-08-30,London Clinical Site,-80C
+SHP-INTAKE-2026-002,EXT-BAD-00006,GSK-BAD-00006,RNA,Nucleic Acid,20,widgets,2026-08-28,2026-08-20,London Clinical Site,-80C

@@ -1,0 +1,31 @@
+{
+  "canonical_fields": [
+    "shipment_reference",
+    "sample_external_id",
+    "external_barcode",
+    "sample_type",
+    "material_type",
+    "quantity",
+    "quantity_unit",
+    "collection_date",
+    "received_date",
+    "source_location",
+    "temperature_requirement"
+  ],
+  "aliases": {
+    "shipment_reference": ["shipment_reference", "shipment_ref", "shipment", "shipment_id"],
+    "sample_external_id": ["sample_external_id", "external_sample_id", "sample_id", "external_id"],
+    "external_barcode": ["external_barcode", "barcode", "barcode_id"],
+    "sample_type": ["sample_type", "type", "specimen_type"],
+    "material_type": ["material_type", "material", "matrix"],
+    "quantity": ["quantity", "qty", "volume", "amount"],
+    "quantity_unit": ["quantity_unit", "unit", "uom"],
+    "collection_date": ["collection_date", "collected_on", "collection_dt"],
+    "received_date": ["received_date", "received_on", "receipt_date"],
+    "source_location": ["source_location", "origin", "site"],
+    "temperature_requirement": ["temperature_requirement", "temp_req", "storage_temp"]
+  },
+  "sample_id_pattern": "^[A-Z0-9][A-Z0-9._-]{2,63}$",
+  "barcode_pattern": "^[A-Z0-9][A-Z0-9._-]{2,63}$",
+  "allowed_units": ["mL", "uL", "mg", "g"]
+}
