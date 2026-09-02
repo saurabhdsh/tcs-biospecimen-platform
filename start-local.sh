@@ -66,7 +66,54 @@ unquarantine() {
 
 download() {
   local url="$1" dest="$2"
-  curl -fL --retry 3 --retry-delay 2 -o "$dest" "$url"
+  curl -fL --retry 3 --retry-delay 2 \
+    --connect-timeout 20 --max-time 180 \
+    -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" \
+    -o "$dest" "$url"
+}
+
+try_download() {
+  local url="$1" dest="$2"
+  if download "$url" "$dest"; then
+    return 0
+  fi
+  rm -f "$dest"
+  return 1
+}
+
+zonky_classifier() {
+  case "$(uname -m)" in
+    arm64) echo "darwin-arm64v8" ;;
+    x86_64) echo "darwin-amd64" ;;
+    *) die "Unsupported Mac CPU: $(uname -m)" ;;
+  esac
+}
+
+resolve_pg_bin() {
+  if [[ -x "$RUNTIME/postgres/bin/pg_ctl" ]]; then
+    PG_BIN="$RUNTIME/postgres/bin"
+    return 0
+  fi
+  local found
+  found="$(find "$RUNTIME/postgres" -type f -name pg_ctl 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$found" && -x "$found" ]]; then
+    PG_BIN="$(dirname "$found")"
+    return 0
+  fi
+  return 1
+}
+
+unpack_zonky_jar() {
+  local jar="$1"
+  local tmp="$RUNTIME/postgres-unpack"
+  rm -rf "$tmp" "$RUNTIME/postgres"
+  mkdir -p "$tmp" "$RUNTIME/postgres"
+  unzip -qo "$jar" -d "$tmp"
+  local archive
+  archive="$(find "$tmp" -type f \( -name '*.txz' -o -name '*.tar.xz' -o -name '*.tar.gz' -o -name '*.tgz' \) | head -n 1 || true)"
+  [[ -n "$archive" ]] || return 1
+  tar -xf "$archive" -C "$RUNTIME/postgres"
+  rm -rf "$tmp" "$jar"
 }
 
 cleanup() {
@@ -169,7 +216,11 @@ locate_existing_postgres() {
     /Applications/Postgres.app/Contents/Versions/16/bin \
     "$HOME/Applications/Postgres.app/Contents/Versions/latest/bin" \
     /opt/homebrew/opt/postgresql@16/bin \
-    /usr/local/opt/postgresql@16/bin; do
+    /opt/homebrew/opt/postgresql@17/bin \
+    /opt/homebrew/opt/postgresql/bin \
+    /usr/local/opt/postgresql@16/bin \
+    /usr/local/opt/postgresql@17/bin \
+    /usr/local/opt/postgresql/bin; do
     if find_pg_bin_from "$dir"; then
       return 0
     fi
@@ -188,22 +239,33 @@ ensure_postgres_binaries() {
   fi
 
   local ver="16.15.0"
-  local triple name
+  local triple name classifier
   triple="$(cpu_triple)"
   name="postgresql-${ver}-${triple}"
-  log "PostgreSQL is not on this Mac. Downloading $name into the project (no Homebrew)"
+  classifier="$(zonky_classifier)"
   mkdir -p "$RUNTIME"
-  download "https://github.com/theseus-rs/postgresql-binaries/releases/download/${ver}/${name}.tar.gz" "$RUNTIME/postgres.tar.gz"
+
+  log "PostgreSQL is not on this Mac. Downloading a portable copy into the project"
   rm -rf "$RUNTIME/postgres"
   mkdir -p "$RUNTIME/postgres"
-  tar -xzf "$RUNTIME/postgres.tar.gz" -C "$RUNTIME/postgres"
-  rm -f "$RUNTIME/postgres.tar.gz"
-  if [[ -x "$RUNTIME/postgres/bin/pg_ctl" ]]; then
-    PG_BIN="$RUNTIME/postgres/bin"
+
+  if try_download "https://github.com/theseus-rs/postgresql-binaries/releases/download/${ver}/${name}.tar.gz" "$RUNTIME/postgres.tar.gz"; then
+    tar -xzf "$RUNTIME/postgres.tar.gz" -C "$RUNTIME/postgres"
+    rm -f "$RUNTIME/postgres.tar.gz"
+  elif try_download "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-${classifier}/${ver}/embedded-postgres-binaries-${classifier}-${ver}.jar" "$RUNTIME/postgres.jar"; then
+    ok "GitHub releases were blocked; using Maven Central instead"
+    unpack_zonky_jar "$RUNTIME/postgres.jar" || die "Failed to unpack the Maven Central PostgreSQL archive"
+  elif command -v brew >/dev/null 2>&1; then
+    log "Portable download failed. Installing postgresql@16 with Homebrew"
+    brew install postgresql@16
+    locate_existing_postgres || die "Homebrew PostgreSQL installed, but pg_ctl was not found"
+    ok "Using PostgreSQL tools in $PG_BIN"
+    return
   else
-    PG_BIN="$(find "$RUNTIME/postgres" -type f -name pg_ctl | head -n 1 | xargs dirname)"
+    die "Could not download PostgreSQL (GitHub returned 403 and Maven Central was unavailable). Install Postgres.app from https://postgresapp.com, reopen the terminal, then run ./start-local.sh again."
   fi
-  [[ -n "$PG_BIN" && -x "$PG_BIN/pg_ctl" ]] || die "Failed to unpack user-local PostgreSQL"
+
+  resolve_pg_bin || die "Failed to unpack user-local PostgreSQL"
   unquarantine "$RUNTIME/postgres"
   ok "User-local PostgreSQL ready: $PG_BIN"
 }
